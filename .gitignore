@@ -1,0 +1,8 @@
+venv/
+ai-engine/venv/
+node_modules/
+.env
+__pycache__/
+.vscode/
+dist/
+build/
