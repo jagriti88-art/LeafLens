@@ -1,15 +1,17 @@
 import os
-import uuid
 import numpy as np
-import tensorflow as tf
+import io
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
-import io
+
+# IMPORTANT: Import standalone keras for Keras 3 models
+import keras
+import tensorflow as tf
 
 app = FastAPI()
 
-# Enable CORS so your Node.js server can talk to this
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,11 +19,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 1. Load the model (Update path to match your folder)
-MODEL_PATH = "plant_disease_recog_model_pwp.keras"
-model = tf.keras.models.load_model(MODEL_PATH)
+# 1. Environment Optimization for Render (Memory Management)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+tf.config.set_visible_devices([], 'GPU') # Force CPU only
 
-# 2. Use the exact labels from the original creator
+MODEL_PATH = "plant_disease_recog_model_pwp.keras"
+model = None
+
+# Lazy loading the model to save initial memory
+def load_model():
+    global model
+    if model is None:
+        print("🔄 Loading Keras 3 model...")
+        model = keras.models.load_model(MODEL_PATH)
+        print("✅ Model loaded successfully!")
+    return model
+
 LABELS = [
     'Apple___Apple_scab', 'Apple___Black_rot', 'Apple___Cedar_apple_rust', 'Apple___healthy',
     'Background_without_leaves', 'Blueberry___healthy', 'Cherry___Powdery_mildew', 'Cherry___healthy',
@@ -35,25 +48,31 @@ LABELS = [
 ]
 
 def preprocess_image(image_bytes):
-    # The original model used (160, 160) - THIS IS CRITICAL
+    # Resize to 160x160 as per your model requirements
     img = Image.open(io.BytesIO(image_bytes)).convert('RGB').resize((160, 160))
-    img_array = tf.keras.preprocessing.image.img_to_array(img)
+    img_array = keras.utils.img_to_array(img)
     img_array = np.expand_dims(img_array, axis=0)
-    # If the original creator normalized the data (/255), uncomment the next line:
-    # img_array = img_array / 255.0
+    # The current Keras/EfficientNet usually handles normalization internally, 
+    # but if accuracy is low, you may need: img_array = img_array / 255.0
     return img_array
+
+@app.get("/")
+def home():
+    return {"status": "AI Engine is Running", "model": MODEL_PATH}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     try:
-        # Read image
+        current_model = load_model()
         contents = await file.read()
         features = preprocess_image(contents)
         
-        # Predict
-        predictions = model.predict(features)
+        predictions = current_model.predict(features)
         class_idx = np.argmax(predictions[0])
         confidence = float(np.max(predictions[0]))
+        
+        # Memory Cleanup: help Render's small RAM
+        tf.keras.backend.clear_session()
         
         return {
             "disease": LABELS[class_idx],
@@ -64,4 +83,6 @@ async def predict(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Render uses the PORT environment variable
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
