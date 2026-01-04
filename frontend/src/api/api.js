@@ -1,11 +1,13 @@
 import axios from 'axios';
 
-const API = axios.create({ baseURL: 'http://localhost:5000/api' });
+// 1. Use environment variable for production, fallback to localhost for dev
+const API = axios.create({ 
+    baseURL: import.meta.env.VITE_BACKEND_URL || 'https://leaflens-2qjk.onrender.com/api' 
+});
 
 // Middleware to attach JWT token to every request
 API.interceptors.request.use((req) => {
-    // We changed the app name to LeafLens, but let's stick to your 
-    // localStorage key for now to avoid breaking existing logins.
+    // Keep your existing localStorage key logic
     const user = JSON.parse(localStorage.getItem('plantz_user'));
     if (user?.token) {
         req.headers.Authorization = `Bearer ${user.token}`;
