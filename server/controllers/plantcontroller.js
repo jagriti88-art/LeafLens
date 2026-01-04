@@ -3,12 +3,13 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const FormData = require('form-data');
 const User = require('../models/userModel'); 
 
-// 1. Initialize Gemini with Stable 2025 Settings
+// 1. Initialize Gemini
+// Ensure GEMINI_API_KEY is in your Render Environment Variables
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const diagnosePlant = async (req, res) => {
     try {
-        // Basic Check
+        // --- 1. VALIDATION ---
         if (!req.file) {
             return res.status(400).json({ error: "No image uploaded" });
         }
@@ -20,63 +21,74 @@ const diagnosePlant = async (req, res) => {
             contentType: req.file.mimetype,
         });
 
-        if (!process.env.PYTHON_AI_URL) {
-            throw new Error("PYTHON_AI_URL is missing in .env");
-        }
+        // Your FastAPI URL on Render
+        const pythonAiUrl = process.env.PYTHON_AI_URL || "https://leaflens-1-hxai.onrender.com/predict";
 
-        // This defines 'aiRes' so the rest of the code can use it
-        const aiRes = await axios.post(process.env.PYTHON_AI_URL, form, {
-            headers: { ...form.getHeaders() }
+        console.log("📤 Sending image to AI Engine...");
+        
+        const aiRes = await axios.post(pythonAiUrl, form, {
+            headers: { ...form.getHeaders() },
+            timeout: 40000 // Extended timeout for heavy ML model loading
         });
 
-        // Now aiRes.data exists!
         const { disease, confidence } = aiRes.data;
+        console.log(`✅ AI Engine Result: ${disease} (${confidence})`);
 
         // --- 3. GET TREATMENT FROM GEMINI ---
-        const model = genAI.getGenerativeModel(
-            { model: "gemini-2.5-flash" },
-            { apiVersion: 'v1' }
-        );
+        // Using gemini-1.5-flash for the best balance of speed and intelligence
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-        const prompt = `The plant has been diagnosed with "${disease}". Provide a concise 3-step organic treatment plan for a home gardener.`;
+        const prompt = `
+            You are an expert plant pathologist. 
+            A plant has been diagnosed with "${disease}".
+            The detection confidence is ${ (confidence * 100).toFixed(2) }%.
+            
+            Provide a professional but easy-to-understand response for a home gardener:
+            1. A brief explanation of what "${disease}" is.
+            2. A 3-step organic treatment plan.
+            3. One prevention tip to avoid this in the future.
+            
+            Format the response with clear headings and bullet points.
+        `;
         
         const result = await model.generateContent(prompt);
         const treatmentText = result.response.text();
 
+        // Prepare the data object
         const diagnosisData = {
-            disease,
+            disease: disease.replace(/___/g, ' ').replace(/_/g, ' '), // Cleans up labels like "Tomato___Early_blight"
             confidence: (confidence * 100).toFixed(2) + "%",
             treatment: treatmentText,
             createdAt: new Date()
         };
 
         // --- 4. UPDATE MONGODB HISTORY ---
-        // 'req.user' comes from your 'protect' middleware (decoded.id)
+        // req.user is populated by your protect middleware
         if (req.user) {
             await User.findByIdAndUpdate(
                 req.user, 
                 { $push: { history: diagnosisData } },
                 { new: true }
             );
-            console.log(`✅ History saved for user: ${req.user}`);
+            console.log(`💾 Diagnosis saved to history for user: ${req.user}`);
         } else {
-            console.warn("⚠️ No user ID found - history not saved.");
+            console.warn("⚠️ User not authenticated; skipping history save.");
         }
 
-        // --- 5. RETURN SUCCESS ---
+        // --- 5. RETURN RESPONSE TO FRONTEND ---
         res.json({
             success: true,
             ...diagnosisData
         });
 
     } catch (error) {
-        console.error("AI Error:", error.message);
+        console.error("❌ Diagnosis Error Details:", error.response?.data || error.message);
         
-        // Handle Axios specific errors (Python server down)
-        if (error.code === 'ECONNREFUSED') {
-            return res.status(500).json({ 
-                error: "Python AI Engine is not running", 
-                details: "Start your Python server on port 8000" 
+        // Specific error handling for Python Engine
+        if (error.code === 'ECONNABORTED' || error.code === 'ECONNREFUSED') {
+            return res.status(503).json({ 
+                error: "AI Engine Offline", 
+                details: "The Python AI engine is currently waking up. Please try again in 30 seconds." 
             });
         }
 
