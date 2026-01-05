@@ -34,7 +34,7 @@ const diagnosePlant = async (req, res) => {
 
         // --- 3. GET TREATMENT FROM GEMINI ---
         // Using gemini-pro which is available on v1beta API
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
         const prompt = `
             You are an expert plant pathologist. 
