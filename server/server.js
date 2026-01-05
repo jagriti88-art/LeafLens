@@ -17,12 +17,31 @@ const {
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
-// --- 1. Middleware & Production CORS ---
+// --- 1. Production CORS Configuration ---
+const allowedOrigins = [
+    'http://localhost:5173',               // Vite Local
+    'https://leaf-lens-delta.vercel.app'   // Your Vercel Frontend
+];
+
 app.use(cors({
-    origin: '*', // For hackathon ease; change to your Vercel URL later for security
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or Postman)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) !== -1 || origin.endsWith('.vercel.app')) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS Policy'));
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
     credentials: true
 }));
+
+// --- CRITICAL FIX FOR EXPRESS 5 ---
+// Named wildcard '/*any' prevents the PathError crash on preflight
+app.options('/*any', cors()); 
+
 app.use(express.json());
 
 // --- 2. Database Connection ---
@@ -30,7 +49,6 @@ mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log('✅ Connected to MongoDB Atlas'))
     .catch((err) => {
         console.error('❌ MongoDB Connection Error:', err.message);
-        // Don't exit process in production; let Render try to restart
     });
 
 // --- 3. Public Auth Routes ---
@@ -45,10 +63,9 @@ app.get('/api/dashboard/summary', protect, getDashboardSummary);
 app.get('/api/dashboard/history', protect, getRecentActivity);
 app.get('/api/dashboard/details/:id', protect, getDiagnosisDetails);
 
-// --- 6. Production Health Checks ---
-// Root route so visiting https://leaflens-2qjk.onrender.com doesn't show "Cannot GET /"
+// --- 6. Health Checks & Base Routes ---
 app.get('/', (req, res) => {
-    res.send('LeafLens Node.js Backend is LIVE 🚀');
+    res.send('🌿 LeafLens Node.js Backend is LIVE 🚀');
 });
 
 app.get('/api/test', (req, res) => {
@@ -61,13 +78,14 @@ app.get('/api/test', (req, res) => {
 
 // --- 7. Global Error Handling ---
 app.use((err, req, res, next) => {
-    console.error('Global Error Handler:', err.stack);
-    res.status(500).json({ 
-        message: err.message || 'Something went wrong on the server' 
+    console.error('Detailed Error:', err.stack);
+    res.status(err.status || 500).json({ 
+        success: false,
+        message: err.message || 'Internal Server Error' 
     });
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-    console.log(`🚀 LeafLens Backend running on port ${PORT}`);
+    console.log(`🚀 Server active on port ${PORT}`);
 });

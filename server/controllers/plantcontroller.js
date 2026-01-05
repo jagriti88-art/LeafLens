@@ -4,7 +4,6 @@ const FormData = require('form-data');
 const User = require('../models/userModel'); 
 
 // 1. Initialize Gemini
-// Ensure GEMINI_API_KEY is in your Render Environment Variables
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const diagnosePlant = async (req, res) => {
@@ -21,22 +20,21 @@ const diagnosePlant = async (req, res) => {
             contentType: req.file.mimetype,
         });
 
-        // Your FastAPI URL on Render
-        const pythonAiUrl = process.env.PYTHON_AI_URL || "https://leaflens-1-hxai.onrender.com/predict";
+        const pythonAiUrl = process.env.PYTHON_AI_URL || "http://localhost:8000/predict";
 
         console.log("📤 Sending image to AI Engine...");
         
         const aiRes = await axios.post(pythonAiUrl, form, {
             headers: { ...form.getHeaders() },
-            timeout: 40000 // Extended timeout for heavy ML model loading
+            timeout: 60000 // Increased to 60s for cold starts
         });
 
         const { disease, confidence } = aiRes.data;
         console.log(`✅ AI Engine Result: ${disease} (${confidence})`);
 
         // --- 3. GET TREATMENT FROM GEMINI ---
-        // Using gemini-1.5-flash for the best balance of speed and intelligence
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // Using gemini-pro which is available on v1beta API
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
         const prompt = `
             You are an expert plant pathologist. 
@@ -52,25 +50,28 @@ const diagnosePlant = async (req, res) => {
         `;
         
         const result = await model.generateContent(prompt);
-        const treatmentText = result.response.text();
+        const response = await result.response; // Ensure response is awaited
+        const treatmentText = response.text();
 
         // Prepare the data object
+        const cleanDiseaseName = disease.replace(/___/g, ' ').replace(/_/g, ' ');
         const diagnosisData = {
-            disease: disease.replace(/___/g, ' ').replace(/_/g, ' '), // Cleans up labels like "Tomato___Early_blight"
+            disease: cleanDiseaseName,
             confidence: (confidence * 100).toFixed(2) + "%",
             treatment: treatmentText,
             createdAt: new Date()
         };
 
         // --- 4. UPDATE MONGODB HISTORY ---
-        // req.user is populated by your protect middleware
         if (req.user) {
+            // Use req.user._id or req.user depending on how your protect middleware is written
+            const userId = req.user._id || req.user;
             await User.findByIdAndUpdate(
-                req.user, 
+                userId, 
                 { $push: { history: diagnosisData } },
                 { new: true }
             );
-            console.log(`💾 Diagnosis saved to history for user: ${req.user}`);
+            console.log(`💾 Diagnosis saved to history for user: ${userId}`);
         } else {
             console.warn("⚠️ User not authenticated; skipping history save.");
         }
@@ -82,13 +83,12 @@ const diagnosePlant = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Diagnosis Error Details:", error.response?.data || error.message);
+        console.error("❌ Diagnosis Error Details:", error.message);
         
-        // Specific error handling for Python Engine
         if (error.code === 'ECONNABORTED' || error.code === 'ECONNREFUSED') {
             return res.status(503).json({ 
                 error: "AI Engine Offline", 
-                details: "The Python AI engine is currently waking up. Please try again in 30 seconds." 
+                details: "The Python AI engine is currently waking up or offline." 
             });
         }
 
