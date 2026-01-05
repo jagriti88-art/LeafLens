@@ -9,13 +9,15 @@ from PIL import Image
 import keras
 import tensorflow as tf
 
-app = FastAPI()
+# FIX: Added redirect_slashes=False to prevent 405 Method Not Allowed errors
+app = FastAPI(redirect_slashes=False)
 
-# Enable CORS
+# Enable CORS with explicit methods
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"], 
     allow_headers=["*"],
 )
 
@@ -52,8 +54,6 @@ def preprocess_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes)).convert('RGB').resize((160, 160))
     img_array = keras.utils.img_to_array(img)
     img_array = np.expand_dims(img_array, axis=0)
-    # The current Keras/EfficientNet usually handles normalization internally, 
-    # but if accuracy is low, you may need: img_array = img_array / 255.0
     return img_array
 
 @app.get("/")
@@ -79,10 +79,11 @@ async def predict(file: UploadFile = File(...)):
             "confidence": confidence
         }
     except Exception as e:
-        return {"error": str(e)}
+        # Return a 500 error if it fails so Node.js knows it crashed
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    # Render uses the PORT environment variable
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
