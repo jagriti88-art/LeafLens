@@ -28,7 +28,7 @@ const diagnosePlant = async (req, res) => {
         const { disease, confidence } = aiRes.data;
 
         // GEMINI 1.5 FLASH: Stable for v0.24.1 SDK
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const prompt = `A plant has "${disease}". Give a brief explanation, 3 organic steps to cure it, and 1 prevention tip.`;
         
         const result = await model.generateContent(prompt);
