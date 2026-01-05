@@ -1,39 +1,39 @@
 import os
 import numpy as np
 import io
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
-# IMPORTANT: Import standalone keras for Keras 3 models
-import keras
+# 1. CRITICAL Optimization: Disable heavy features before importing TF
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0' 
+
 import tensorflow as tf
 
-# FIX: Added redirect_slashes=False to prevent 405 Method Not Allowed errors
+# Force TensorFlow to use only CPU and minimal RAM
+tf.config.set_visible_devices([], 'GPU')
+
 app = FastAPI(redirect_slashes=False)
 
-# Enable CORS with explicit methods
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"], 
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
-
-# 1. Environment Optimization for Render (Memory Management)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-tf.config.set_visible_devices([], 'GPU') # Force CPU only
 
 MODEL_PATH = "plant_disease_recog_model_pwp.keras"
 model = None
 
-# Lazy loading the model to save initial memory
+# 2. Optimized Model Loader
 def load_model():
     global model
     if model is None:
-        print("🔄 Loading Keras 3 model...")
-        model = keras.models.load_model(MODEL_PATH)
+        print("🔄 Loading model in memory-restricted mode...")
+        # compile=False saves significant RAM by not loading training configurations
+        model = tf.keras.models.load_model(MODEL_PATH, compile=False)
         print("✅ Model loaded successfully!")
     return model
 
@@ -50,28 +50,34 @@ LABELS = [
 ]
 
 def preprocess_image(image_bytes):
-    # Resize to 160x160 as per your model requirements
+    # Use Pillow directly to keep memory footprint low
     img = Image.open(io.BytesIO(image_bytes)).convert('RGB').resize((160, 160))
-    img_array = keras.utils.img_to_array(img)
+    # Convert to float32 and normalize manually to avoid Keras utility overhead
+    img_array = np.array(img).astype('float32') / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
 
 @app.get("/")
 def home():
-    return {"status": "AI Engine is Running", "model": MODEL_PATH}
+    return {"status": "AI Engine is Running", "memory_mode": "restricted"}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     try:
+        # Load model only when needed (Lazy Loading)
         current_model = load_model()
+        
         contents = await file.read()
         features = preprocess_image(contents)
         
-        predictions = current_model.predict(features)
+        # predict_on_batch is often lighter on RAM than .predict()
+        predictions = current_model.predict_on_batch(features)
+        
         class_idx = np.argmax(predictions[0])
         confidence = float(np.max(predictions[0]))
         
-        # Memory Cleanup: help Render's small RAM
+        # 3. AGGRESSIVE Cleanup
+        del features
         tf.keras.backend.clear_session()
         
         return {
@@ -79,8 +85,7 @@ async def predict(file: UploadFile = File(...)):
             "confidence": confidence
         }
     except Exception as e:
-        # Return a 500 error if it fails so Node.js knows it crashed
-        from fastapi import HTTPException
+        print(f"❌ Prediction Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
